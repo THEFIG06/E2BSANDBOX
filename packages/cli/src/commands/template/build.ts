@@ -28,6 +28,7 @@ import { configName, getConfigPath, loadConfig, saveConfig } from 'src/config'
 import * as child_process from 'child_process'
 
 import { client } from 'src/api'
+import { getUserConfig } from 'src/user'
 
 const templateCheckInterval = 500 // 0.5 sec
 
@@ -183,6 +184,11 @@ export const buildCommand = new commander.Command('build')
           cpuCount = opts.cpuCount || config.cpu_count
           memoryMB = opts.memoryMb || config.memory_mb
           teamID = opts.team || config.team_id
+        }
+
+        const userConfig = getUserConfig()
+        if (userConfig) {
+          teamID = teamID || userConfig.teamId
         }
 
         if (config && templateID && config.template_id !== templateID) {
