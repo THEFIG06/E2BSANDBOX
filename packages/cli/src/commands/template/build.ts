@@ -6,7 +6,7 @@ import * as stripAnsi from 'strip-ansi'
 import * as boxen from 'boxen'
 import commandExists from 'command-exists'
 import { wait } from 'src/utils/wait'
-import { ensureAccessToken } from 'src/api'
+import { connectionConfig, ensureAccessToken } from 'src/api'
 import { getRoot } from 'src/utils/filesystem'
 import {
   asBold,
@@ -28,82 +28,131 @@ import { configName, getConfigPath, loadConfig, saveConfig } from 'src/config'
 import * as child_process from 'child_process'
 
 import { client } from 'src/api'
+import { handleE2BRequestError } from '../../utils/errors'
 import { getUserConfig } from 'src/user'
+import { buildWithProxy } from './buildWithProxy'
 
 const templateCheckInterval = 500 // 0.5 sec
 
-const getTemplate = e2b.withAccessToken(
-  client.api
-    .path('/templates/{templateID}/builds/{buildID}/status')
-    .method('get')
-    .create(),
-)
+async function getTemplateBuildLogs({
+  templateID,
+  buildID,
+  logsOffset,
+}: {
+  templateID: string
+  buildID: string
+  logsOffset: number
+}) {
+  const signal = connectionConfig.getSignal()
+  const res = await client.api.GET(
+    '/templates/{templateID}/builds/{buildID}/status',
+    {
+      signal,
+      params: {
+        path: {
+          templateID,
+          buildID,
+        },
+        query: {
+          logsOffset,
+        },
+      },
+    }
+  )
 
-const requestTemplateBuild = e2b.withAccessToken(
-  client.api.path('/templates').method('post').create(),
-)
+  handleE2BRequestError(res.error, 'Error getting template build status')
+  return res.data as e2b.paths['/templates/{templateID}/builds/{buildID}/status']['get']['responses']['200']['content']['application/json']
+}
 
-const requestTemplateRebuild = e2b.withAccessToken(
-  client.api.path('/templates/{templateID}').method('post').create(),
-)
+async function requestTemplateBuild(
+  args?: e2b.paths['/templates']['post']['requestBody']['content']['application/json']
+) {
+  return await client.api.POST('/templates', {
+    body: args,
+  })
+}
 
-const triggerTemplateBuild = e2b.withAccessToken(
-  client.api
-    .path('/templates/{templateID}/builds/{buildID}')
-    .method('post')
-    .create(),
-)
+async function requestTemplateRebuild(
+  templateID: string,
+  args?: e2b.paths['/templates/{templateID}']['post']['requestBody']['content']['application/json']
+) {
+  return await client.api.POST('/templates/{templateID}', {
+    body: args,
+    params: {
+      path: {
+        templateID,
+      },
+    },
+  })
+}
+
+async function triggerTemplateBuild(templateID: string, buildID: string) {
+  const res = await client.api.POST(
+    '/templates/{templateID}/builds/{buildID}',
+    {
+      params: {
+        path: {
+          templateID,
+          buildID,
+        },
+      },
+    }
+  )
+
+  handleE2BRequestError(res.error, 'Error triggering template build')
+  return res.data
+}
 
 export const buildCommand = new commander.Command('build')
   .description(
     `build sandbox template defined by ${asLocalRelative(
-      defaultDockerfileName,
+      defaultDockerfileName
     )} or ${asLocalRelative(
-      fallbackDockerfileName,
+      fallbackDockerfileName
     )} in root directory. By default the root directory is the current working directory. This command also creates ${asLocal(
-      configName,
-    )} config.`,
+      configName
+    )} config.`
   )
   .argument(
     '[template]',
     `specify ${asBold(
-      '[template]',
+      '[template]'
     )} to rebuild it. If you don's specify ${asBold(
-      '[template]',
+      '[template]'
     )} and there is no ${asLocal(
-      'e2b.toml',
-    )} a new sandbox template will be created.`,
+      'e2b.toml'
+    )} a new sandbox template will be created.`
   )
   .addOption(pathOption)
   .option(
     '-d, --dockerfile <file>',
     `specify path to Dockerfile. By default E2B tries to find ${asLocal(
-      defaultDockerfileName,
-    )} or ${asLocal(fallbackDockerfileName)} in root directory.`,
+      defaultDockerfileName
+    )} or ${asLocal(fallbackDockerfileName)} in root directory.`
   )
   .option(
     '-n, --name <template-name>',
-    'specify sandbox template name. You can use the template name to start the sandbox with SDK. The template name must be lowercase and contain only letters, numbers, dashes and underscores.',
+    'specify sandbox template name. You can use the template name to start the sandbox with SDK. The template name must be lowercase and contain only letters, numbers, dashes and underscores.'
   )
   .option(
     '-c, --cmd <start-command>',
-    'specify command that will be executed when the sandbox is started.',
+    'specify command that will be executed when the sandbox is started.'
   )
   .addOption(teamOption)
   .addOption(configOption)
   .option(
     '--cpu-count <cpu-count>',
     'specify the number of CPUs that will be used to run the sandbox. The default value is 2.',
-    parseInt,
+    parseInt
   )
   .option(
     '--memory-mb <memory-mb>',
     'specify the amount of memory in megabytes that will be used to run the sandbox. Must be an even number. The default value is 512.',
-    parseInt,
+    parseInt
   )
   .option(
     '--build-arg <args...>',
-    'specify additional build arguments for the build command. The format should be <varname>=<value>.',
+    'specify additional build arguments for the build command. The format should be <varname>=<value>.'
   )
   .alias('bd')
   .action(
@@ -119,13 +168,13 @@ export const buildCommand = new commander.Command('build')
         cpuCount?: number
         memoryMb?: number
         buildArg?: [string]
-      },
+      }
     ) => {
       try {
         const dockerInstalled = commandExists.sync('docker')
         if (!dockerInstalled) {
           console.error(
-            'Docker is required to build and push the sandbox template. Please install Docker and try again.',
+            'Docker is required to build and push the sandbox template. Please install Docker and try again.'
           )
           process.exit(1)
         }
@@ -145,8 +194,8 @@ export const buildCommand = new commander.Command('build')
         if (newName && !/[a-z0-9-_]+/.test(newName)) {
           console.error(
             `Name ${asLocal(
-              newName,
-            )} is not valid. Name can only contain lowercase letters, numbers, dashes and underscores.`,
+              newName
+            )} is not valid. Name can only contain lowercase letters, numbers, dashes and underscores.`
           )
           process.exit(1)
         }
@@ -175,8 +224,8 @@ export const buildCommand = new commander.Command('build')
                   ? [config.template_name]
                   : undefined,
               },
-              relativeConfigPath,
-            )}`,
+              relativeConfigPath
+            )}`
           )
           templateID = config.template_id
           dockerfile = opts.dockerfile || config.dockerfile
@@ -194,7 +243,7 @@ export const buildCommand = new commander.Command('build')
         if (config && templateID && config.template_id !== templateID) {
           // error: you can't specify different ID than the one in config
           console.error(
-            "You can't specify different ID than the one in config. If you want to build a new sandbox template remove the config file.",
+            "You can't specify different ID than the one in config. If you want to build a new sandbox template remove the config file."
           )
           process.exit(1)
         }
@@ -206,21 +255,21 @@ export const buildCommand = new commander.Command('build')
         ) {
           console.log(
             `The sandbox template name will be changed from ${asLocal(
-              config.template_name,
-            )} to ${asLocal(newName)}.`,
+              config.template_name
+            )} to ${asLocal(newName)}.`
           )
         }
         const name = newName || config?.template_name
 
         const { dockerfileContent, dockerfileRelativePath } = getDockerfile(
           root,
-          dockerfile,
+          dockerfile
         )
 
         console.log(
           `Found ${asLocalRelative(
-            dockerfileRelativePath,
-          )} that will be used to build the sandbox template.`,
+            dockerfileRelativePath
+          )} that will be used to build the sandbox template.`
         )
 
         const body = {
@@ -236,26 +285,20 @@ export const buildCommand = new commander.Command('build')
           if (opts.memoryMb % 2 !== 0) {
             console.error(
               `The memory in megabytes must be an even number. You provided ${asLocal(
-                opts.memoryMb.toFixed(0),
-              )}.`,
+                opts.memoryMb.toFixed(0)
+              )}.`
             )
             process.exit(1)
           }
         }
 
-        const template = await requestBuildTemplate(
-          accessToken,
-          body,
-          !!config,
-          relativeConfigPath,
-          templateID,
-        )
+        const template = await requestBuildTemplate(body, templateID)
         templateID = template.templateID
 
         console.log(
           `Requested build for the sandbox template ${asFormattedSandboxTemplate(
-            template,
-          )} `,
+            template
+          )} `
         )
 
         await saveConfig(
@@ -269,32 +312,33 @@ export const buildCommand = new commander.Command('build')
             memory_mb: memoryMB,
             team_id: teamID,
           },
-          true,
+          true
         )
 
         try {
           child_process.execSync(
-            `echo "${accessToken}" | docker login docker.${e2b.SANDBOX_DOMAIN} -u _e2b_access_token --password-stdin`,
+            `echo "${accessToken}" | docker login docker.${connectionConfig.domain} -u _e2b_access_token --password-stdin`,
             {
               stdio: 'inherit',
               cwd: root,
-            },
+            }
           )
         } catch (err: any) {
           console.error(
-            'Docker login failed. Please try to log in with `e2b auth login` and try again.',
+            'Docker login failed. Please try to log in with `e2b auth login` and try again.'
           )
           process.exit(1)
         }
         process.stdout.write('\n')
 
         console.log('Building docker image...')
-        const cmd = `docker build . -f ${dockerfileRelativePath} --pull --platform linux/amd64 -t docker.${e2b.SANDBOX_DOMAIN
-          }/e2b/custom-envs/${templateID}:${template.buildID} ${Object.entries(
-            dockerBuildArgs,
-          )
-            .map(([key, value]) => `--build-arg="${key}=${value}"`)
-            .join(' ')}`
+        const cmd = `docker build . -f ${dockerfileRelativePath} --pull --platform linux/amd64 -t docker.${
+          connectionConfig.domain
+        }/e2b/custom-envs/${templateID}:${template.buildID} ${Object.entries(
+          dockerBuildArgs
+        )
+          .map(([key, value]) => `--build-arg="${key}=${value}"`)
+          .join(' ')}`
         child_process.execSync(cmd, {
           stdio: 'inherit',
           cwd: root,
@@ -306,119 +350,94 @@ export const buildCommand = new commander.Command('build')
         console.log('Docker image built.\n')
 
         console.log('Pushing docker image...')
-        child_process.execSync(
-          `docker push docker.${e2b.SANDBOX_DOMAIN}/e2b/custom-envs/${templateID}:${template.buildID}`,
-          {
-            stdio: 'inherit',
-            cwd: root,
-          },
-        )
+        try {
+          child_process.execSync(
+            `docker push docker.${connectionConfig.domain}/e2b/custom-envs/${templateID}:${template.buildID}`,
+            {
+              stdio: 'inherit',
+              cwd: root,
+            }
+          )
+        } catch (err: any) {
+          await buildWithProxy(
+            userConfig,
+            connectionConfig,
+            accessToken,
+            template,
+            root
+          )
+        }
         console.log('Docker image pushed.\n')
 
         console.log('Triggering build...')
-        await triggerBuild(accessToken, templateID, template.buildID)
+        await triggerBuild(templateID, template.buildID)
 
         console.log(
           `Triggered build for the sandbox template ${asFormattedSandboxTemplate(
-            template,
-          )} `,
+            template
+          )} `
         )
 
         console.log('Waiting for build to finish...')
-        await waitForBuildFinish(
-          accessToken,
-          templateID,
-          template.buildID,
-          name,
-        )
+        await waitForBuildFinish(templateID, template.buildID, name)
 
         process.exit(0)
       } catch (err: any) {
         console.error(err)
         process.exit(1)
       }
-    },
+    }
   )
 
 async function waitForBuildFinish(
-  accessToken: string,
   templateID: string,
   buildID: string,
-  name?: string,
+  name?: string
 ) {
   let logsOffset = 0
 
-  let template: Awaited<ReturnType<typeof getTemplate>> | undefined
+  let template: Awaited<ReturnType<typeof getTemplateBuildLogs>> | undefined
   const aliases = name ? [name] : undefined
 
   process.stdout.write('\n')
   do {
     await wait(templateCheckInterval)
 
-    try {
-      template = await getTemplate(accessToken, {
-        templateID,
-        logsOffset,
-        buildID,
-      })
-    } catch (e) {
-      if (e instanceof getTemplate.Error) {
-        const error = e.getActualType()
-        if (error.status === 401) {
-          throw new Error(
-            `Error getting build info - (${error.status}) bad request: ${error.data.message}`,
-          )
-        }
-        if (error.status === 404) {
-          throw new Error(
-            `Error getting build info - (${error.status}) not found: ${error.data.message}`,
-          )
-        }
-        if (error.status === 500) {
-          throw new Error(
-            `Error getting build info - (${error.status}) server error: ${error.data.message}`,
-          )
-        }
-      }
-      throw e
-    }
+    template = await getTemplateBuildLogs({
+      templateID,
+      logsOffset,
+      buildID,
+    })
 
-    logsOffset += template.data.logs.length
+    logsOffset += template.logs.length
 
-    switch (template.data.status) {
+    switch (template.status) {
       case 'building':
-        template.data.logs.forEach((line) =>
-          process.stdout.write(asBuildLogs(stripAnsi.default(line))),
+        template.logs.forEach((line) =>
+          process.stdout.write(asBuildLogs(stripAnsi.default(line)))
         )
         break
       case 'ready': {
-        const pythonExample = asPython(`from e2b import Sandbox
+        const pythonExample = asPython(`from e2b import Sandbox, AsyncSandbox
 
-# Start sandbox
-sandbox = Sandbox(template="${aliases?.length ? aliases[0] : template.data.templateID
-          }")
+# Create sync sandbox
+sandbox = Sandbox("${aliases?.length ? aliases[0] : template.templateID}")
 
-# Interact with sandbox. Learn more here:
-# https://e2b.dev/docs/sandbox/overview
-
-# Close sandbox once done
-sandbox.close()`)
+# Create async sandbox
+sandbox = await AsyncSandbox.create("${
+          aliases?.length ? aliases[0] : template.templateID
+        }")`)
 
         const typescriptExample = asTypescript(`import { Sandbox } from 'e2b'
 
-// Start sandbox
-const sandbox = await Sandbox.create({ template: '${aliases?.length ? aliases[0] : template.data.templateID}' })
+// Create sandbox
+const sandbox = await Sandbox.create('${
+          aliases?.length ? aliases[0] : template.templateID
+        }')`)
 
-// Interact with sandbox. Learn more here:
-// https://e2b.dev/docs/sandbox/overview
-
-// Close sandbox once done
-await sandbox.close()`)
-
-        const examplesMessage = `You can use E2B Python or JS SDK to spawn sandboxes now.
-Find more here - ${asPrimary(
-          'https://e2b.dev/docs/guide/custom-sandbox',
-        )} in ${asBold('Spawn and control your sandbox')} section.`
+        const examplesMessage = `You can now use the template to create custom sandboxes.\nLearn more on ${asPrimary(
+          'https://e2b.dev/docs'
+        )}`
 
         const exampleHeader = boxen.default(examplesMessage, {
           padding: {
@@ -441,31 +460,31 @@ Find more here - ${asPrimary(
 
         const exampleUsage = `${withDelimiter(
           pythonExample,
-          'Python SDK',
+          'Python SDK'
         )}\n${withDelimiter(typescriptExample, 'JS SDK', true)}`
 
         console.log(
           `\n✅ Building sandbox template ${asFormattedSandboxTemplate({
             aliases,
-            ...template.data,
-          })} finished.\n${exampleHeader}\n${exampleUsage}\n`,
+            ...template,
+          })} finished.\n${exampleHeader}\n${exampleUsage}\n`
         )
         break
       }
       case 'error':
-        template.data.logs.forEach((line) =>
-          process.stdout.write(asBuildLogs(stripAnsi.default(line))),
+        template.logs.forEach((line) =>
+          process.stdout.write(asBuildLogs(stripAnsi.default(line)))
         )
         throw new Error(
           `\n❌ Building sandbox template ${asFormattedSandboxTemplate({
             aliases,
-            ...template.data,
+            ...template,
           })} failed.\nCheck the logs above for more details or contact us ${asPrimary(
-            '(https://e2b.dev/docs/getting-help)',
-          )} to get help.\n`,
+            '(https://e2b.dev/docs/getting-help)'
+          )} to get help.\n`
         )
     }
-  } while (template.data.status === 'building')
+  } while (template.status === 'building')
 }
 
 function loadFile(filePath: string) {
@@ -486,8 +505,8 @@ function getDockerfile(root: string, file?: string) {
     if (dockerfileContent === undefined) {
       throw new Error(
         `No ${asLocalRelative(
-          dockerfileRelativePath,
-        )} found in the root directory.`,
+          dockerfileRelativePath
+        )} found in the root directory.`
       )
     }
 
@@ -528,19 +547,16 @@ function getDockerfile(root: string, file?: string) {
 
   throw new Error(
     `No ${asLocalRelative(defaultDockerfileRelativePath)} or ${asLocalRelative(
-      fallbackDockerfileRelativeName,
+      fallbackDockerfileRelativeName
     )} found in the root directory (${root}). You can specify a custom Dockerfile with ${asBold(
-      '--dockerfile <file>',
-    )} option.`,
+      '--dockerfile <file>'
+    )} option.`
   )
 }
 
 async function requestBuildTemplate(
-  accessToken: string,
   args: e2b.paths['/templates']['post']['requestBody']['content']['application/json'],
-  hasConfig: boolean,
-  configPath: string,
-  templateID?: string,
+  templateID?: string
 ): Promise<
   Omit<
     e2b.paths['/templates']['post']['responses']['202']['content']['application/json'],
@@ -549,82 +565,17 @@ async function requestBuildTemplate(
 > {
   let res
   if (templateID) {
-    res = await requestTemplateRebuild(accessToken, { templateID, ...args })
+    res = await requestTemplateRebuild(templateID, args)
   } else {
-    res = await requestTemplateBuild(accessToken, args)
+    res = await requestTemplateBuild(args)
   }
 
-  if (!res.ok) {
-    const error:
-      | e2b.paths['/templates']['post']['responses']['401']['content']['application/json']
-      | e2b.paths['/templates']['post']['responses']['500']['content']['application/json'] =
-      res.data as any
-
-    if (error.code === 401) {
-      throw new Error(
-        `Authentication error: ${res.statusText}, ${error.message ?? 'no message'
-        }`,
-      )
-    }
-
-    if (error.code === 404) {
-      throw new Error(
-        `Sandbox template you want to build ${templateID ? `(${templateID})` : ''
-        } not found: ${res.statusText}, ${error.message ?? 'no message'}\n${hasConfig
-          ? `This could be caused by ${asLocalRelative(
-            configPath,
-          )} belonging to a deleted template or a template that you don't own. If so you can delete the ${asLocalRelative(
-            configPath,
-          )} and start building the template again.`
-          : ''
-        }`,
-      )
-    }
-
-    if (error.code === 500) {
-      throw new Error(
-        `Server error: ${res.statusText}, ${error.message ?? 'no message'}`,
-      )
-    }
-
-    throw new Error(
-      `API request failed: ${res.statusText}, ${error.message ?? 'no message'}`,
-    )
-  }
-
-  return res.data as any
+  handleE2BRequestError(res.error, 'Error requesting template build')
+  return res.data
 }
 
-async function triggerBuild(
-  accessToken: string,
-  templateID: string,
-  buildID: string,
-) {
-  const res = await triggerTemplateBuild(accessToken, { templateID, buildID })
-
-  if (!res.ok) {
-    const error:
-      | e2b.paths['/templates/{templateID}/builds/{buildID}']['post']['responses']['401']['content']['application/json']
-      | e2b.paths['/templates/{templateID}/builds/{buildID}']['post']['responses']['500']['content']['application/json'] =
-      res.data as any
-
-    if (error.code === 401) {
-      throw new Error(
-        `Authentication error: ${res.statusText}, ${error.message ?? 'no message'
-        }`,
-      )
-    }
-
-    if (error.code === 500) {
-      throw new Error(
-        `Server error: ${res.statusText}, ${error.message ?? 'no message'}`,
-      )
-    }
-
-    throw new Error(
-      `API request failed: ${res.statusText}, ${error.message ?? 'no message'}`,
-    )
-  }
+async function triggerBuild(templateID: string, buildID: string) {
+  await triggerTemplateBuild(templateID, buildID)
 
   return
 }

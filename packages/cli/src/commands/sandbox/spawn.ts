@@ -63,8 +63,6 @@ export const spawnCommand = new commander.Command('spawn')
         }
 
         await connectSandbox({ apiKey, template: { templateID } })
-        // We explicitly call exit because the sandbox is keeping the program alive.
-        // We also don't want to call sandbox.close because that would disconnect other users from the edit session.
         process.exit(0)
       } catch (err: any) {
         console.error(err)
@@ -80,31 +78,27 @@ export async function connectSandbox({
   apiKey: string
   template: Pick<e2b.components['schemas']['Template'], 'templateID'>
 }) {
-  const sandbox = await e2b.Sandbox.create({
-    apiKey,
-    template: template.templateID,
-  })
+  const sandbox = await e2b.Sandbox.create(template.templateID, { apiKey })
 
-  if (sandbox.terminal) {
-    const { exited } = await spawnConnectedTerminal(
-      sandbox.terminal,
-      `Terminal connected to sandbox ${asFormattedSandboxTemplate(
-        template,
-      )}\nwith sandbox URL ${asBold(
-        `${sandbox.getProtocol()}://${sandbox.getHostname()}`,
-      )}`,
-      `Disconnecting terminal from sandbox ${asFormattedSandboxTemplate(
-        template,
-      )}`,
-    )
+  // keep-alive loop
+  const intervalId = setInterval(async () => {
+    await sandbox.setTimeout(30_000)
+  }, 5_000)
 
-    await exited
+  console.log(
+    `Terminal connecting to template ${asFormattedSandboxTemplate(
+      template,
+    )} with sandbox ID ${asBold(`${sandbox.sandboxId}`)}`,
+  )
+  try {
+    await spawnConnectedTerminal(sandbox)
+  } finally {
+    clearInterval(intervalId)
+    await sandbox.kill()
     console.log(
-      `Closing terminal connection to sandbox ${asFormattedSandboxTemplate(
+      `Closing terminal connection to template ${asFormattedSandboxTemplate(
         template,
-      )}`,
+      )} with sandbox ID ${asBold(`${sandbox.sandboxId}`)}`,
     )
-  } else {
-    throw new Error('Cannot start terminal - no sandbox')
   }
 }
