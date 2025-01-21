@@ -8,10 +8,19 @@ import { tiers } from '@/utils/consts'
 import Spinner from '@/components/Spinner'
 
 import { TierActiveTag } from './TierActiveTag'
+import { getBillingUrl } from '@/app/(dashboard)/dashboard/utils'
+import { toast } from '@/components/ui/use-toast'
 
-const billingApiURL = process.env.NEXT_PUBLIC_BILLING_API_URL
-function createCheckout(tierID: string, teamID: string) {
-  return fetch(`${billingApiURL}/checkouts`, {
+function createCheckout(domain: string, tierID: string, teamID: string) {
+  if (domain !== 'e2b.dev') {
+    console.error('Managing billing is allowed only at e2b.dev.')
+    toast({
+      title: 'Error',
+      description: 'Managing billing is allowed only at e2b.dev.',
+    })
+  }
+
+  return fetch(getBillingUrl(domain, '/checkouts'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -23,7 +32,7 @@ function createCheckout(tierID: string, teamID: string) {
   })
 }
 
-function SwitchTierButton({ team }: { team: Team }) {
+function SwitchTierButton({ team, domain }: { team: Team; domain: string }) {
   const { user, isLoading } = useUser()
   const [error, setError] = useState('')
 
@@ -34,7 +43,11 @@ function SwitchTierButton({ team }: { team: Team }) {
       return setError('You must be logged in to switch to Pro.')
     }
 
-    const response = await createCheckout(tiers.pro.id, user.teams[0].id)
+    const response = await createCheckout(
+      domain,
+      tiers.pro.id,
+      user.teams[0].id
+    )
     const responseData = await response.json()
 
     if (responseData.error) {
@@ -48,7 +61,6 @@ function SwitchTierButton({ team }: { team: Team }) {
     return <Spinner />
   }
 
-
   if (!user) {
     return (
       <Link href="/auth/sign-up">
@@ -57,31 +69,22 @@ function SwitchTierButton({ team }: { team: Team }) {
     )
   }
 
-
   // Only show the button if the user is on the base_v1 tier.
   // Teams can have custom tiers. We only want the button to users on the free tier.
-  if (!billingApiURL || (team.tier !== tiers.hobby.id && team.tier !== tiers.pro.id)) {
+  if (!domain || (team.tier !== tiers.hobby.id && team.tier !== tiers.pro.id)) {
     return
   }
 
   return (
     <div className="flex flex-col items-start justify-start gap-1 my-4">
       <div className="flex items-center justify-start gap-2">
-        {team.tier === tiers.pro.id && (
-          <TierActiveTag />
-        )}
+        {team.tier === tiers.pro.id && <TierActiveTag />}
         {team.tier !== tiers.pro.id && (
-          <Button
-            onClick={createCheckoutSession}
-          >
-            Switch to Pro
-          </Button>
+          <Button onClick={createCheckoutSession}>Switch to Pro</Button>
         )}
       </div>
 
-      {error && (
-        <span className="text-red-500 font-medium">{error}</span>
-      )}
+      {error && <span className="text-red-500 font-medium">{error}</span>}
     </div>
   )
 }

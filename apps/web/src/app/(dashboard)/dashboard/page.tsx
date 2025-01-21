@@ -1,6 +1,8 @@
 'use client'
 
 import { Suspense, useEffect, useState } from 'react'
+import { useLocalStorage } from 'usehooks-ts'
+
 import {
   BarChart,
   CreditCard,
@@ -8,6 +10,7 @@ import {
   Key,
   LucideIcon,
   PackageIcon,
+  PencilRuler,
   Settings,
   Users,
 } from 'lucide-react'
@@ -23,6 +26,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import { PersonalContent } from '@/components/Dashboard/Personal'
 import { TemplatesContent } from '@/components/Dashboard/Templates'
 import { SandboxesContent } from '@/components/Dashboard/Sandboxes'
+import { DeveloperContent } from '@/components/Dashboard/Developer'
 
 function redirectToCurrentURL() {
   const url = typeof window !== 'undefined' ? window.location.href : undefined
@@ -43,6 +47,7 @@ const menuLabels = [
   'usage',
   'billing',
   'team',
+  'developer',
 ] as const
 type MenuLabel = (typeof menuLabels)[number]
 
@@ -65,7 +70,7 @@ export default function Page() {
 
   if (user) {
     return (
-      <div className="flex min-h-screen flex-col md:flex-row pt-16 md:pt-32 px-2 md:px-32">
+      <div className="flex flex-col md:flex-row pt-16 md:pt-32 px-2 md:px-32">
         <Suspense>
           <Dashboard user={user} />
         </Suspense>
@@ -81,6 +86,11 @@ const Dashboard = ({ user }) => {
   const teamParam = searchParams!.get('team')
   const [teams, setTeams] = useState<Team[]>([])
   const [currentTeam, setCurrentTeam] = useState<Team | null>(null)
+
+  const domainState = useLocalStorage(
+    'e2bDomain',
+    process.env.NEXT_PUBLIC_DOMAIN || ''
+  )
 
   const initialTab =
     tab && menuLabels.includes(tab as MenuLabel)
@@ -140,7 +150,7 @@ const Dashboard = ({ user }) => {
           setCurrentTeam={setCurrentTeam}
           setTeams={setTeams}
         />
-        <div className="flex-1 md:pl-10">
+        <div className="flex-1 md:pl-10 pb-16">
           <h2 className="text-2xl mb-2 font-bold">
             {selectedItem[0].toUpperCase() + selectedItem.slice(1)}
           </h2>
@@ -152,6 +162,7 @@ const Dashboard = ({ user }) => {
             teams={teams}
             setTeams={setTeams}
             setCurrentTeam={setCurrentTeam}
+            domainState={domainState}
           />
         </div>
       </>
@@ -199,6 +210,7 @@ const iconMap: { [key in MenuLabel]: LucideIcon } = {
   team: Users,
   templates: FileText,
   sandboxes: PackageIcon,
+  developer: PencilRuler,
 }
 
 const MenuItem = ({
@@ -238,6 +250,7 @@ function MainContent({
   teams,
   setTeams,
   setCurrentTeam,
+  domainState,
 }: {
   selectedItem: MenuLabel
   user: E2BUser
@@ -245,20 +258,29 @@ function MainContent({
   teams: Team[]
   setTeams: (teams: Team[]) => void
   setCurrentTeam: (team: Team) => void
+  domainState: [string, (value: string) => void]
 }) {
   switch (selectedItem) {
     case 'personal':
-      return <PersonalContent user={user} />
+      return <PersonalContent user={user} domain={domainState[0]} />
     case 'keys':
-      return <KeysContent currentTeam={team} user={user} />
+      return (
+        <KeysContent currentTeam={team} user={user} domain={domainState[0]} />
+      )
     case 'sandboxes':
-      return <SandboxesContent team={team} />
+      return <SandboxesContent team={team} domain={domainState[0]} />
     case 'templates':
-      return <TemplatesContent user={user} teamId={team.id} />
+      return (
+        <TemplatesContent
+          user={user}
+          teamId={team.id}
+          domain={domainState[0]}
+        />
+      )
     case 'usage':
-      return <UsageContent team={team} />
+      return <UsageContent team={team} domain={domainState[0]} />
     case 'billing':
-      return <BillingContent team={team} />
+      return <BillingContent team={team} domain={domainState[0]} />
     case 'team':
       return (
         <TeamContent
@@ -267,8 +289,11 @@ function MainContent({
           teams={teams}
           setTeams={setTeams}
           setCurrentTeam={setCurrentTeam}
+          domain={domainState[0]}
         />
       )
+    case 'developer':
+      return <DeveloperContent domainState={domainState} />
     default:
       return <ErrorContent />
   }
